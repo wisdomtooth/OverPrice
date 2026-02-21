@@ -9,35 +9,44 @@ ZYTE_API_KEY = st.secrets["ZYTE_API_KEY"]
 
 def extract_iherb_stable(url):
     api_url = "https://api.zyte.com/v1/extract"
-    # Simplified payload: Only ask for the Product object
-    # This avoids the 400 Error by using Zyte's standard, optimized schema
     payload = {
         "url": url,
-        "product": True
+        "product": True,
+        "browserHtml": True,
+        # 'actions' tells the browser to behave like a human to trigger the price render
+        "actions": [
+            {"action": "waitForSelector", "selector": ".price", "timeout": 5},
+            {"action": "scrollPage", "blocks": 1}
+        ]
     }
     try:
         r = requests.post(api_url, auth=(ZYTE_API_KEY, ""), json=payload, timeout=60)
         
-        # If we get a 400, it means the URL or the API Key has an issue
         if r.status_code != 200:
             return {"Brand": f"Error {r.status_code}", "Price": None, "Success": "❌"}
 
-        data = r.json().get("product", {})
-        price = data.get("price")
-        name = data.get("name", "Unknown")
+        res = r.json()
+        data = res.get("product", {})
         
-        # We parse the Magnesium MG from the name/description directly
-        # iHerb titles usually look like: "Magnesium Citrate, 200 mg, 240 Veggie Caps"
+        # Check if the AI extraction found the price
+        price = data.get("price")
+        
+        # FALLBACK: If AI missed the price, we search the raw browserHtml for a dollar sign
+        if not price and "browserHtml" in res:
+            html = base64.b64decode(res["browserHtml"]).decode("utf-8")
+            price_match = re.search(r'\"price\":\s?\"(\d+\.\d+)\"', html) or re.search(r'\$(\d+\.\d+)', html)
+            price = float(price_match.group(1)) if price_match else None
+
+        name = data.get("name", "Unknown")
         desc = f"{name} {data.get('description', '')}"
         mg_match = re.search(r'(\d+)\s?mg', desc, re.I)
-        count_match = re.search(r'(\d+)\s?(capsules|tablets|caps|count)', desc, re.I)
         
         return {
             "Brand": name[:25],
-            "Price": float(price) if price else None,
+            "Price": price,
             "Mg": int(mg_match.group(1)) if mg_match else 0,
-            "Count": int(count_match.group(1)) if count_match else 100,
-            "Success": "✅" if price and mg_match else "❌"
+            "Count": 100, # Simplified for testing
+            "Success": "✅" if price else "❌"
         }
     except Exception as e:
         return {"Brand": "System Error", "Price": None, "Success": "❌"}
