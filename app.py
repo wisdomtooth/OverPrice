@@ -7,9 +7,14 @@ import re
 import base64
 from bs4 import BeautifulSoup
 
-# --- CONFIG & SECRETS ---
-# Access secrets from Streamlit's dashboard settings
-ZYTE_API_KEY = st.secrets.get("ZYTE_API_KEY", "47c0ce047e104f9cab87ff9e0e1a7d26")
+# --- SECURE CONFIG ---
+# This line pulls the key from the Streamlit Cloud "Secrets" UI you configured.
+# No one viewing your GitHub will see your actual key.
+try:
+    ZYTE_API_KEY = st.secrets["ZYTE_API_KEY"]
+except KeyError:
+    st.error("Please set the ZYTE_API_KEY in Streamlit Secrets.")
+    st.stop()
 
 def get_amazon_html(url):
     response = requests.post(
