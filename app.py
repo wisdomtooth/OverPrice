@@ -4,138 +4,72 @@ import statsmodels.api as sm
 import plotly.express as px
 import requests
 from concurrent.futures import ThreadPoolExecutor
-from streamlit_gsheets import GSheetsConnection
 
-# --- 1. CONFIG & SECURE KEYS ---
-try:
-    ZYTE_API_KEY = st.secrets["ZYTE_API_KEY"]
-except KeyError:
-    st.error("Please set ZYTE_API_KEY in Streamlit Secrets.")
-    st.stop()
+# --- CONFIG ---
+ZYTE_API_KEY = st.secrets.get("ZYTE_API_KEY", "47c0ce047e104f9cab87ff9e0e1a7d26")
 
-# --- 2. ZYTE AI EXTRACTION LOGIC ---
 def extract_single_product(url):
     api_url = "https://api.zyte.com/v1/extract"
-    
-    # We add a 'description' that acts as a prompt for the AI
     payload = {
         "url": url,
         "product": True,
+        "browserHtml": True, # <--- FORCE BROWSER RENDERING
         "customAttributes": {
-            "mg_oxide": {
-                "type": "integer", 
-                "description": "Total milligrams (mg) of Magnesium Oxide. Look in the 'Ingredients' or 'Supplement Facts' section."
-            },
-            "mg_citrate": {
-                "type": "integer", 
-                "description": "Total milligrams (mg) of Magnesium Citrate. Look for 'as citrate' or 'citrate' in ingredients."
-            },
-            "mg_chelate": {
-                "type": "integer", 
-                "description": "Total milligrams (mg) of Magnesium Amino Acid Chelate or Bisglycinate."
-            },
-            "count": {
-                "type": "integer", 
-                "description": "The number of tablets, capsules, or pills in the entire bottle (e.g., 60, 120, 200)."
-            }
+            "mg_oxide": {"type": "integer", "description": "Total mg of Magnesium Oxide"},
+            "mg_citrate": {"type": "integer", "description": "Total mg of Magnesium Citrate"},
+            "mg_chelate": {"type": "integer", "description": "Total mg of Magnesium Chelate/Bisglycinate"},
+            "count": {"type": "integer", "description": "Number of capsules/tablets in bottle"}
         }
     }
-    
     try:
-        # We increase timeout to 60s because AI extraction is slower
         r = requests.post(api_url, auth=(ZYTE_API_KEY, ""), json=payload, timeout=60)
         if r.status_code == 200:
             res = r.json()
             p = res.get("product", {})
             c = res.get("customAttributes", {})
-            
-            # CRITICAL: We only return the product if it actually has a price and at least one ingredient
-            if p.get("price") and (c.get("mg_oxide") or c.get("mg_citrate") or c.get("mg_chelate")):
-                return {
-                    "Brand": p.get("brand") or p.get("name", "Unknown")[:15],
-                    "Price": float(p.get("price")),
-                    "Mg_Oxide_mg": int(c.get("mg_oxide") or 0),
-                    "Mg_Citrate_mg": int(c.get("mg_citrate") or 0),
-                    "Mg_Chelate_mg": int(c.get("mg_chelate") or 0),
-                    "Count": int(c.get("count") or 100),
-                    "URL": url
-                }
-    except Exception as e:
-        print(f"Error scraping {url}: {e}")
-    return None
+            return {
+                "Brand": (p.get("brand") or p.get("name", "Unknown"))[:15],
+                "Price": p.get("price"),
+                "Mg_Oxide": c.get("mg_oxide", 0),
+                "Mg_Citrate": c.get("mg_citrate", 0),
+                "Mg_Chelate": c.get("mg_chelate", 0),
+                "Count": c.get("count"),
+                "Success": "✅" if p.get("price") and c.get("count") else "❌"
+            }
+    except: return None
+
+# --- UI ---
+st.title("⚖️ OverPrice Deep-Debugger")
+
+if st.button("🚀 Run Deep Scrape"):
+    # Using a list of known high-quality links for the first test
+    test_links = [
+        "https://www.amazon.com.au/dp/B085S3V9R8", # Nature's Own
+        "https://www.amazon.com.au/dp/B07P8G27L7", # Swisse
+        "https://www.amazon.com.au/dp/B000Z967G6", # Doctors Best
+        "https://www.amazon.com.au/dp/B07R69B79V"  # Cenovis
+    ]
     
-@st.cache_data(ttl=3600)
-def get_search_links(search_url):
-    """Finds the top product URLs from the search results."""
-    api_url = "https://api.zyte.com/v1/extract"
-    payload = {"url": search_url, "productNavigation": True}
-    r = requests.post(api_url, auth=(ZYTE_API_KEY, ""), json=payload)
-    if r.status_code == 200:
-        items = r.json().get("productNavigation", {}).get("items", [])
-        return [item.get("url") for item in items if item.get("url")][:10]
-    return []
-
-# --- 3. UI & LEADERBOARD LOGIC ---
-st.set_page_config(page_title="OverPrice Master", layout="wide")
-st.title("⚖️ OverPrice: Global Magnesium Arbitrage")
-
-# Initialize Google Sheets Connection
-conn = st.connection("gsheets", type=GSheetsConnection)
-
-# Display Global Leaderboard
-st.subheader("🏆 Global Value Leaderboard")
-try:
-    global_df = conn.read(worksheet="Sheet1")
-    if not global_df.empty:
-        # We calculate the 'Value Score' (Higher is better)
-        # Value Score = Ingredient Value / Price
-        global_df['Value_Score'] = global_df['Total_Fair_Value'] / global_df['Price']
-        leaderboard = global_df.sort_values('Value_Score', ascending=False).head(10)
-        st.dataframe(leaderboard[['Brand', 'Price', 'Value_Score', 'URL']], use_container_width=True)
-except Exception as e:
-    st.info("Leaderboard is ready for its first contribution.")
-
-# --- 4. THE MAIN RUNNER ---
-if st.button("🚀 Run Analysis & Update Global Stats"):
-    search_url = "https://www.amazon.com.au/s?k=Magnesium+Supplements"
-    
-    with st.spinner("Executing Parallel Scrape (Zyte AI)..."):
-        links = get_search_links(search_url)
+    with st.spinner("Analyzing Market Data..."):
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            results = list(executor.map(extract_single_product, test_links))
         
-        # Parallel Execution for Speed
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            scraped_results = list(executor.map(extract_single_product, links))
+        df = pd.DataFrame([r for r in results if r]).fillna(0)
         
-        # Clean Data
-        results = [r for r in scraped_results if r and r['Price']]
-        df = pd.DataFrame(results).fillna(0)
+        # --- DEBUG VIEW ---
+        st.subheader("Raw Scrape Data (Debug)")
+        st.dataframe(df)
         
-        if len(df) >= 3:
-            # Regression Math
-            df['Price_Per_Tab'] = df['Price'] / df['Count']
-            X = df[['Mg_Oxide_mg', 'Mg_Citrate_mg', 'Mg_Chelate_mg']]
-            X = sm.add_constant(X)
+        # --- MATH ENGINE ---
+        valid_df = df[df['Success'] == "✅"].copy()
+        
+        if len(valid_df) >= 3:
+            valid_df['Price_Per_Tab'] = valid_df['Price'] / valid_df['Count']
+            X = sm.add_constant(valid_df[['Mg_Oxide', 'Mg_Citrate', 'Mg_Chelate']])
+            model = sm.OLS(valid_df['Price_Per_Tab'], X).fit()
             
-            model = sm.OLS(df['Price_Per_Tab'], X).fit()
-            df['Total_Fair_Value'] = model.predict(X) * df['Count']
-            
-            # --- UPDATE DATABASE ---
-            try:
-                # Merge with existing data to avoid duplicates
-                existing_data = conn.read(worksheet="Sheet1")
-                final_df = pd.concat([existing_data, df]).drop_duplicates(subset=['URL'])
-                conn.update(worksheet="Sheet1", data=final_df)
-                st.success("Successfully contributed to Global Leaderboard!")
-            except Exception as e:
-                st.warning(f"Analysis complete, but database sync failed: {e}")
-
-            # --- SHOW RESULTS ---
-            st.write("### Current Search Results")
-            st.dataframe(df[['Brand', 'Price', 'Total_Fair_Value']])
-            
-            fig = px.scatter(df, x="Total_Fair_Value", y="Price", text="Brand", trendline="ols",
-                             title="Current Market Snapshot: Price vs. Ingredient Value")
-            st.plotly_chart(fig)
-            st.rerun()
+            valid_df['Fair_Value'] = model.predict(X) * valid_df['Count']
+            st.success("Regression Successful!")
+            st.dataframe(valid_df[['Brand', 'Price', 'Fair_Value']])
         else:
-            st.error("Not enough data points found. Try again.")
+            st.error(f"Only found {len(valid_df)} valid products. We need 3. Look at the red ❌ above.")
