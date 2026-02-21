@@ -12,44 +12,41 @@ ZYTE_API_KEY = st.secrets.get("ZYTE_API_KEY", "47c0ce047e104f9cab87ff9e0e1a7d26"
 
 def extract_single_product(url):
     api_url = "https://api.zyte.com/v1/extract"
-    # Using 'pageContent' turns on Zyte's most advanced AI unblocker
+    
+    # We use 'product': True but force the 'generate' method.
+    # This uses a multimodal LLM that can 'see' the page layout.
     payload = {
         "url": url,
-        "pageContent": True, 
-        "browserHtml": True
+        "product": True,
+        "customAttributes": {
+            "mg_oxide": {"type": "integer", "description": "Total mg of Magnesium Oxide"},
+            "mg_citrate": {"type": "integer", "description": "Total mg of Magnesium Citrate"},
+            "mg_chelate": {"type": "integer", "description": "Total mg of Magnesium Chelate/Bisglycinate/Biglycinate"},
+            "count": {"type": "integer", "description": "Number of capsules or tablets in the bottle"}
+        },
+        "customAttributesMethod": "generate" # <--- THE MAGIC KEY
     }
+    
     try:
-        r = requests.post(api_url, auth=(ZYTE_API_KEY, ""), json=payload, timeout=60)
+        # We must use a longer timeout for the AI to 'think'
+        r = requests.post(api_url, auth=(ZYTE_API_KEY, ""), json=payload, timeout=90)
+        
         if r.status_code == 200:
             res = r.json()
-            # pageContent returns the main text of the page in 'text'
-            text_data = res.get("text", "")
+            prod = res.get("product", {})
+            cust = res.get("customAttributes", {})
             
-            # --- SURGICAL REGEX ON RAW TEXT ---
-            # 1. Price (Looking for $XX.XX)
-            price_match = re.search(r'\$(\d+\.\d+)', text_data)
-            price = float(price_match.group(1)) if price_match else None
-            
-            # 2. Ingredients
-            oxide = re.search(r'oxide.*?(\d+)\s?mg', text_data, re.I)
-            citrate = re.search(r'citrate.*?(\d+)\s?mg', text_data, re.I)
-            # Premium forms often use 'glycinate'
-            chelate = re.search(r'(chelate|glycinate).*?(\d+)\s?mg', text_data, re.I)
-            
-            # 3. Bottle Count
-            count_match = re.search(r'(\d+)\s?(count|tablets|capsules|tabs)', text_data, re.I)
-            count = int(count_match.group(1)) if count_match else 100
-            
-            success = "✅" if price and (oxide or citrate or chelate) else "❌"
+            # If the AI returns a price, we are in business
+            price = prod.get("price")
             
             return {
-                "Brand": url.split("/")[-1][:15], # Fallback brand from URL
-                "Price": price,
-                "Mg_Oxide": int(oxide.group(1)) if oxide else 0,
-                "Mg_Citrate": int(citrate.group(1)) if citrate else 0,
-                "Mg_Chelate": int(chelate.group(2)) if chelate else 0,
-                "Count": count,
-                "Success": success
+                "Brand": prod.get("brand") or prod.get("name", "Unknown")[:15],
+                "Price": float(price) if price else None,
+                "Mg_Oxide": cust.get("mg_oxide", 0),
+                "Mg_Citrate": cust.get("mg_citrate", 0),
+                "Mg_Chelate": cust.get("mg_chelate", 0),
+                "Count": cust.get("count") or 100,
+                "Success": "✅" if price else "❌"
             }
     except Exception as e:
         return {"Brand": "Error", "Success": "❌"}
