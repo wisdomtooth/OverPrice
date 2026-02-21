@@ -10,34 +10,51 @@ ZYTE_API_KEY = st.secrets.get("ZYTE_API_KEY", "47c0ce047e104f9cab87ff9e0e1a7d26"
 
 def extract_single_product(url):
     api_url = "https://api.zyte.com/v1/extract"
+    # We drop the 'product' AI and just ask for the raw browser HTML
     payload = {
         "url": url,
-        "product": True,
-        "browserHtml": True, # <--- FORCE BROWSER RENDERING
-        "customAttributes": {
-            "mg_oxide": {"type": "integer", "description": "Total mg of Magnesium Oxide"},
-            "mg_citrate": {"type": "integer", "description": "Total mg of Magnesium Citrate"},
-            "mg_chelate": {"type": "integer", "description": "Total mg of Magnesium Chelate/Bisglycinate"},
-            "count": {"type": "integer", "description": "Number of capsules/tablets in bottle"}
-        }
+        "httpResponseBody": True,
+        "browserHtml": True,
     }
     try:
         r = requests.post(api_url, auth=(ZYTE_API_KEY, ""), json=payload, timeout=60)
         if r.status_code == 200:
-            res = r.json()
-            p = res.get("product", {})
-            c = res.get("customAttributes", {})
+            import base64
+            html = base64.b64decode(r.json()["httpResponseBody"]).decode("utf-8")
+            
+            # --- MANUAL EXTRACTION (The Fail-Safe) ---
+            # 1. Price
+            price_match = re.search(r'\"price\":(\d+\.\d+)', html) or re.search(r'\$(\d+\.\d+)', html)
+            price = float(price_match.group(1)) if price_match else None
+            
+            # 2. Brand (Usually in the title)
+            title_match = re.search(r'<title>(.*?)</title>', html)
+            brand = title_match.group(1).split('|')[0][:15] if title_match else "Unknown"
+            
+            # 3. Ingredients (Searching for keywords in the raw text)
+            oxide = re.search(r'oxide.*?(\d+)\s?mg', html, re.I)
+            citrate = re.search(r'citrate.*?(\d+)\s?mg', html, re.I)
+            chelate = re.search(r'chelate.*?(\d+)\s?mg', html, re.I)
+            
+            # 4. Count
+            count_match = re.search(r'(\d+)\s?(count|tablets|capsules|tabs)', html, re.I)
+            count = int(count_match.group(1)) if count_match else 100
+            
+            success = "✅" if price and (oxide or citrate or chelate) else "❌"
+            
             return {
-                "Brand": (p.get("brand") or p.get("name", "Unknown"))[:15],
-                "Price": p.get("price"),
-                "Mg_Oxide": c.get("mg_oxide", 0),
-                "Mg_Citrate": c.get("mg_citrate", 0),
-                "Mg_Chelate": c.get("mg_chelate", 0),
-                "Count": c.get("count"),
-                "Success": "✅" if p.get("price") and c.get("count") else "❌"
+                "Brand": brand,
+                "Price": price,
+                "Mg_Oxide": int(oxide.group(1)) if oxide else 0,
+                "Mg_Citrate": int(citrate.group(1)) if citrate else 0,
+                "Mg_Chelate": int(chelate.group(1)) if chelate else 0,
+                "Count": count,
+                "Success": success
             }
-    except: return None
-
+    except Exception as e:
+        return {"Brand": "Error", "Success": "❌", "Error": str(e)}
+    return None
+    
 # --- UI ---
 st.title("⚖️ OverPrice Deep-Debugger")
 
