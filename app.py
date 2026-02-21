@@ -15,36 +15,55 @@ except KeyError:
 
 # --- 2. ZYTE AI EXTRACTION LOGIC ---
 def extract_single_product(url):
-    """Uses Zyte AI to turn a product page into structured JSON."""
     api_url = "https://api.zyte.com/v1/extract"
+    
+    # We add a 'description' that acts as a prompt for the AI
     payload = {
         "url": url,
         "product": True,
         "customAttributes": {
-            "mg_oxide": {"type": "integer", "description": "mg of magnesium oxide"},
-            "mg_citrate": {"type": "integer", "description": "mg of magnesium citrate"},
-            "mg_chelate": {"type": "integer", "description": "mg of magnesium chelate"},
-            "count": {"type": "integer", "description": "total tablets/capsules"}
+            "mg_oxide": {
+                "type": "integer", 
+                "description": "Total milligrams (mg) of Magnesium Oxide. Look in the 'Ingredients' or 'Supplement Facts' section."
+            },
+            "mg_citrate": {
+                "type": "integer", 
+                "description": "Total milligrams (mg) of Magnesium Citrate. Look for 'as citrate' or 'citrate' in ingredients."
+            },
+            "mg_chelate": {
+                "type": "integer", 
+                "description": "Total milligrams (mg) of Magnesium Amino Acid Chelate or Bisglycinate."
+            },
+            "count": {
+                "type": "integer", 
+                "description": "The number of tablets, capsules, or pills in the entire bottle (e.g., 60, 120, 200)."
+            }
         }
     }
+    
     try:
-        r = requests.post(api_url, auth=(ZYTE_API_KEY, ""), json=payload, timeout=30)
+        # We increase timeout to 60s because AI extraction is slower
+        r = requests.post(api_url, auth=(ZYTE_API_KEY, ""), json=payload, timeout=60)
         if r.status_code == 200:
             res = r.json()
             p = res.get("product", {})
             c = res.get("customAttributes", {})
-            return {
-                "Brand": p.get("brand") or p.get("name", "Unknown")[:15],
-                "Price": p.get("price"),
-                "Mg_Oxide_mg": c.get("mg_oxide", 0),
-                "Mg_Citrate_mg": c.get("mg_citrate", 0),
-                "Mg_Chelate_mg": c.get("mg_chelate", 0),
-                "Count": c.get("count") or 100,
-                "URL": url
-            }
-    except:
-        return None
-
+            
+            # CRITICAL: We only return the product if it actually has a price and at least one ingredient
+            if p.get("price") and (c.get("mg_oxide") or c.get("mg_citrate") or c.get("mg_chelate")):
+                return {
+                    "Brand": p.get("brand") or p.get("name", "Unknown")[:15],
+                    "Price": float(p.get("price")),
+                    "Mg_Oxide_mg": int(c.get("mg_oxide") or 0),
+                    "Mg_Citrate_mg": int(c.get("mg_citrate") or 0),
+                    "Mg_Chelate_mg": int(c.get("mg_chelate") or 0),
+                    "Count": int(c.get("count") or 100),
+                    "URL": url
+                }
+    except Exception as e:
+        print(f"Error scraping {url}: {e}")
+    return None
+    
 @st.cache_data(ttl=3600)
 def get_search_links(search_url):
     """Finds the top product URLs from the search results."""
