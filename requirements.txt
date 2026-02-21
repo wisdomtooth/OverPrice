@@ -4,3 +4,4 @@ statsmodels
 requests
 beautifulsoup4
 plotly
+st-gsheets-connection
