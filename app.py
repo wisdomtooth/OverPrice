@@ -12,48 +12,49 @@ ZYTE_API_KEY = st.secrets.get("ZYTE_API_KEY", "47c0ce047e104f9cab87ff9e0e1a7d26"
 
 def extract_single_product(url):
     api_url = "https://api.zyte.com/v1/extract"
+    # Using 'pageContent' turns on Zyte's most advanced AI unblocker
     payload = {
         "url": url,
-        "httpResponseBody": True,
-        "browserHtml": True,
+        "pageContent": True, 
+        "browserHtml": True
     }
     try:
-        r = requests.post(api_url, auth=(ZYTE_API_KEY, ""), json=payload, timeout=45)
+        r = requests.post(api_url, auth=(ZYTE_API_KEY, ""), json=payload, timeout=60)
         if r.status_code == 200:
-            html = base64.b64decode(r.json()["httpResponseBody"]).decode("utf-8")
+            res = r.json()
+            # pageContent returns the main text of the page in 'text'
+            text_data = res.get("text", "")
             
-            # 1. Price (Look for common Amazon price patterns)
-            price_match = re.search(r'\"price\":(\d+\.\d+)', html) or re.search(r'priceToPay.*?(\d+\.\d+)', html) or re.search(r'\$(\d+\.\d+)', html)
+            # --- SURGICAL REGEX ON RAW TEXT ---
+            # 1. Price (Looking for $XX.XX)
+            price_match = re.search(r'\$(\d+\.\d+)', text_data)
             price = float(price_match.group(1)) if price_match else None
             
-            # 2. Brand
-            title_match = re.search(r'<title>(.*?)</title>', html, re.I)
-            brand = title_match.group(1).split('|')[0][:20] if title_match else "Unknown"
+            # 2. Ingredients
+            oxide = re.search(r'oxide.*?(\d+)\s?mg', text_data, re.I)
+            citrate = re.search(r'citrate.*?(\d+)\s?mg', text_data, re.I)
+            # Premium forms often use 'glycinate'
+            chelate = re.search(r'(chelate|glycinate).*?(\d+)\s?mg', text_data, re.I)
             
-            # 3. Ingredients (Searching for keywords in raw HTML)
-            oxide = re.search(r'oxide.*?(\d+)\s?mg', html, re.I)
-            citrate = re.search(r'citrate.*?(\d+)\s?mg', html, re.I)
-            chelate = re.search(r'chelate.*?(\d+)\s?mg', html, re.I) or re.search(r'glycinate.*?(\d+)\s?mg', html, re.I)
-            
-            # 4. Count
-            count_match = re.search(r'(\d+)\s?(count|tablets|capsules|tabs|caps)', html, re.I)
+            # 3. Bottle Count
+            count_match = re.search(r'(\d+)\s?(count|tablets|capsules|tabs)', text_data, re.I)
             count = int(count_match.group(1)) if count_match else 100
             
             success = "✅" if price and (oxide or citrate or chelate) else "❌"
             
             return {
-                "Brand": brand.strip(),
+                "Brand": url.split("/")[-1][:15], # Fallback brand from URL
                 "Price": price,
                 "Mg_Oxide": int(oxide.group(1)) if oxide else 0,
                 "Mg_Citrate": int(citrate.group(1)) if citrate else 0,
-                "Mg_Chelate": int(chelate.group(1)) if chelate else 0,
+                "Mg_Chelate": int(chelate.group(2)) if chelate else 0,
                 "Count": count,
                 "Success": success
             }
     except Exception as e:
-        return {"Brand": "Error", "Success": "❌", "Price": None}
+        return {"Brand": "Error", "Success": "❌"}
     return None
-
+    
 # --- UI ---
 st.title("⚖️ OverPrice Magnesium Analyzer")
 
