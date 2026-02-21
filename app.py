@@ -46,11 +46,12 @@ def analyze_market(user_url):
     model = sm.OLS(df_market['Price'], X).fit()
 
     # 5. Predict Fair Value for User's Choice
-    # Ensure fair_price is a float, not a numpy array
-    fair_price_array = model.predict([1, mg_target, count_target])
-    fair_price = float(fair_price_array[0]) # <--- FORCE TO FLOAT
+    prediction = model.predict([1, mg_target, count_target])
+    
+    # Force the prediction (which is a 1-element array) into a float
+    fair_price = float(prediction[0]) 
 
-    # Now the subtraction will work perfectly
+    # Now the subtraction will work without the TypeError
     overprice_pct = ((target_price - fair_price) / fair_price) * 100
     
     return target_name, target_price, fair_price, overprice_pct
