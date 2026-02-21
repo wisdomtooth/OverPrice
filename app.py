@@ -44,11 +44,15 @@ def analyze_market(user_url):
     X = df_market[['Mg', 'Count']]
     X = sm.add_constant(X)
     model = sm.OLS(df_market['Price'], X).fit()
-    
-    # 5. Predict Fair Value for User's Choice
-    fair_price = model.predict([1, mg_target, count_target])[0]
-    overprice_pct = ((target_price - fair_price) / fair_price) * 100
 
+    # 5. Predict Fair Value for User's Choice
+    # Ensure fair_price is a float, not a numpy array
+    fair_price_array = model.predict([1, mg_target, count_target])
+    fair_price = float(fair_price_array[0]) # <--- FORCE TO FLOAT
+
+    # Now the subtraction will work perfectly
+    overprice_pct = ((target_price - fair_price) / fair_price) * 100
+    
     return target_name, target_price, fair_price, overprice_pct
 
 # --- STREAMLIT UI ---
